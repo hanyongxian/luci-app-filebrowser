@@ -1,10 +1,15 @@
-name: Build luci-app-filebrowser (wangqn - Ultimate)
+name: Build luci-app-filebrowser (wangqn - No GUI)
 on:
-  workflow_dispatch: # 仅手动触发，避免误执行
+  workflow_dispatch: # 仅手动触发
 
 jobs:
   build-ipk:
     runs-on: ubuntu-22.04
+    env:
+      # 禁用所有图形化交互
+      DEBIAN_FRONTEND: noninteractive
+      TERM: dumb
+
     steps:
       - name: 清理环境&安装系统依赖
         run: |
@@ -16,54 +21,52 @@ jobs:
         run: |
           git clone --depth=1 --branch openwrt-23.05 https://git.openwrt.org/openwrt/openwrt.git openwrt
           cd openwrt
-          # 仅保留核心源，减少干扰
           sed -i '/telephony/d' feeds.conf.default
           ./scripts/feeds update -a -f
           ./scripts/feeds install -a
 
-      - name: 初始化编译环境（生成 usign 等核心工具）
+      - name: 生成纯命令行配置（跳过 menuconfig）
         run: |
           cd openwrt
-          # 关键步骤：先编译基础工具链，生成 staging_dir 下的所有工具
-          make tools/install V=s
-          make toolchain/install V=s
-
-      - name: 替换为 wangqn/luci-app-filebrowser
-        run: |
-          cd openwrt
-          # 删除官方 luci-app-filebrowser
-          rm -rf feeds/luci/applications/luci-app-filebrowser
-          # 克隆 wangqn 版本到 package 目录
-          git clone https://github.com/wangqn/luci-app-filebrowser.git package/luci-app-filebrowser
-          # 安装 filebrowser 核心包（官方）
-          ./scripts/feeds install filebrowser
-
-      - name: 配置编译参数（适配 N1 盒子/armvirt64）
-        run: |
-          cd openwrt
+          # 直接生成 .config，完全不触发 menuconfig
           cat > .config << EOF
           CONFIG_TARGET_armvirt=y
           CONFIG_TARGET_armvirt_64=y
           CONFIG_TARGET_armvirt_64_Default=y
           CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"
           CONFIG_CPU_TYPE="cortex-a53"
-          # 仅编译必要包
           CONFIG_PACKAGE_filebrowser=y
           CONFIG_PACKAGE_luci-app-filebrowser=y
           CONFIG_PACKAGE_luci-base=y
           CONFIG_PACKAGE_luci-compat=y
           CONFIG_PACKAGE_opkg=y
-          # 关闭签名校验（避免 usign 依赖问题）
           CONFIG_SIGNED_PACKAGES=n
+          CONFIG_DEVEL=y
+          CONFIG_TOOLCHAINOPTS=y
           EOF
-          make defconfig
+          # 强制更新配置，跳过交互
+          make defconfig > /dev/null 2>&1
 
-      - name: 编译插件（跳过索引签名）
+      - name: 编译基础工具（无图形化）
         run: |
           cd openwrt
-          # 直接编译，跳过包索引签名（核心修复）
-          make package/filebrowser/compile V=s
-          make package/luci-app-filebrowser/compile V=s
+          # 禁用终端交互，纯后台编译工具
+          make tools/install V=s NO_COLOR=1 > /dev/null 2>&1
+          make toolchain/install V=s NO_COLOR=1 > /dev/null 2>&1
+
+      - name: 替换为 wangqn/luci-app-filebrowser
+        run: |
+          cd openwrt
+          rm -rf feeds/luci/applications/luci-app-filebrowser
+          git clone https://github.com/wangqn/luci-app-filebrowser.git package/luci-app-filebrowser
+          ./scripts/feeds install filebrowser
+
+      - name: 编译插件（纯后台）
+        run: |
+          cd openwrt
+          # 纯后台编译，无终端输出干扰
+          make package/filebrowser/compile V=s NO_COLOR=1
+          make package/luci-app-filebrowser/compile V=s NO_COLOR=1
 
       - name: 上传编译产物
         uses: actions/upload-artifact@v4
